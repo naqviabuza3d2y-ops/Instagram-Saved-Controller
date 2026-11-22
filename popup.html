@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Instagram Saved Review</title>
+<style>
+  body { width: 290px; margin: 0; padding: 18px; background: #f0f6f2; color: #192420; font: 14px system-ui; }
+  h1 { margin: 0 0 12px; font-size: 21px; }
+  p { margin: 0 0 12px; }
+  label, select, button { display: block; margin-top: 8px; }
+  input { max-width: 100%; margin-top: 5px; }
+  select, button { font: inherit; padding: 8px; border: 1px solid #6a8174; border-radius: 7px; }
+  button { cursor: pointer; width: 100%; background: #fff; color: inherit; }
+  #start { background: #234638; color: white; }
+  #status { margin: 10px 0 0; }
+  [hidden] { display: none; }
+</style>
+<h1>Instagram Saved Review</h1>
+<p id="summary">Loading…</p>
+<label id="import-label">Instagram export <input type="file" id="file" accept=".json,application/json"></label>
+<label id="mode-label">Review mode
+  <select id="mode">
+    <option value="1">One review tab</option>
+    <option value="5">Five-tab queue</option>
+  </select>
+</label>
+<button id="start" disabled>Start review</button>
+<button id="restart" hidden>Start from beginning</button>
+<button id="recheck" hidden>Recheck unavailable items</button>
+<button id="pause" hidden>Pause review</button>
+<button id="undo" aria-keyshortcuts="Control+Z" hidden>Undo last unsave</button>
+<p id="status" role="status"></p>
+<script type="module" src="popup.mjs"></script>
+</html>
