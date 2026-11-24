@@ -81,6 +81,8 @@ Shortcuts are ignored while you are typing in a text field. You can also drag th
 - **Unsave** clicks Instagram's visible bookmark, checks that it now shows the unsaved state, and then advances. If the extension cannot find or verify the bookmark, it stays on the item so you can unsave it yourself or choose Review later.
 - **Review later** makes no decision. The item moves to the end of the queue, after all other new items. If it is the last item left, Review later is refused and you must Keep or Unsave.
 
+Summary categories (new, review later, kept, unsaved, and unavailable) are disjoint: each imported item counts once. A previously kept item deferred after Undo counts only as review later, while its stored Keep decision is preserved. Re-review passes report their own progress and deferred count separately.
+
 ### Undo
 
 Click **Undo** or press `Ctrl+Z` to re-save the most recently unsaved post in the current review tab. Then choose Keep, Unsave, or Review later to continue. Posts and reels share one history of the last five unsaves. A failed restore stays in the history so you can retry.
@@ -126,6 +128,8 @@ Detection looks for no bookmark control, no visible media, and either the Englis
 |---|---|
 | The review bar does not appear | Reload the extension at `chrome://extensions`, then refresh the Instagram tab. Make sure you are on `www.instagram.com` and logged in. |
 | "Couldn't verify the bookmark changed" | Check the item on Instagram. Unsave it manually or choose Review later, then continue. |
+| "This item is not in the current export. Choose Keep or Unsave." | This appears when you choose Review later on an Undo item from an older export that is absent from the current export. Keep, Unsave, and Restore still work on that item. |
+| "Saved data is from an unsupported version. Re-import your export to continue." | Re-import your `saved_posts.json` in the popup. This replaces unsupported saved data and works even if a review or Undo is open. |
 | Review paused after unavailable items | Check you are logged in and Instagram loads normally, then resume. Use **Recheck unavailable items** if needed. |
 | Import says the file is invalid | Make sure you chose `saved_posts.json` from a JSON-format export, not the HTML export. |
 | Nothing happens after an update | Reload the extension and refresh all Instagram tabs. |
@@ -168,5 +172,11 @@ These are planned improvements. They are ideas, not promises, and have no dates.
 Have an idea? Open an issue.
 
 ## Contributing
+
+Run the full automated suite from the repository root with Node.js 24 or later:
+
+```sh
+node --test tests/*.test.mjs
+```
 
 Issues and pull requests are welcome. Please keep changes focused, describe what you changed and why, and test a full review (including a removed post that redirects to a creator's profile) before submitting. Do not modify the unavailable-post detection logic without discussing it first, since it handles tricky Instagram behavior.
