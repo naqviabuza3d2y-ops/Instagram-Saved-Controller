@@ -40,7 +40,9 @@ async function fixture(options = {}) {
     getBoundingClientRect() {
       const width = this.hidden ? 0 : this.width;
       const height = this.hidden ? 0 : this.height;
-      return { top: 100, left: 200, bottom: 100 + height, right: 200 + width, width, height };
+      const top = this.top ?? 100;
+      const left = this.left ?? 200;
+      return { top, left, bottom: top + height, right: left + width, width, height };
     }
     setAttribute(name, value) { this.attributes.set(name, value); }
     getAttribute(name) { return this.attributes.get(name) ?? null; }
@@ -76,55 +78,64 @@ async function fixture(options = {}) {
   element("unavailable-notice").hidden = true;
   const document = new Element("document");
   document.hidden = options.hidden ?? false;
-  document.body = { innerText: options.text ?? errorText };
   const media = options.media ? [new Video()] : [];
   // A small DOM tree for the real bookmarkScope()/bookmark() selectors.
   // Clicks change labels, as Instagram does, rather than stubbing bookmark().
   const bookmarkControls = [];
   const bookmarkArticles = [];
-  let bookmarkRoot;
-  if (options.bookmarks || options.articles) {
-    class BookmarkElement extends Element {
-      constructor(name, width = 40, height = 40) {
-        super(name, width, height);
-        this.children = [];
-      }
-      append(...children) {
-        for (const child of children) {
-          child.parentElement = this;
-          this.children.push(child);
-        }
-      }
-      matches(selector) {
-        return selector.split(",").some(part => {
-          part = part.trim();
-          if (part === ":disabled") return Boolean(this.disabled);
-          if (part === "svg title") return this.localName === "title" && this.parentElement?.localName === "svg";
-          const match = /^(\w+)?(?:\[([\w-]+)(?:=["']?([^"'\]]+)["']?)?\])?$/.exec(part);
-          return Boolean(match && (!match[1] || match[1] === this.localName) &&
-            (!match[2] || (this.attributes.has(match[2]) &&
-              (match[3] === undefined || this.getAttribute(match[2]) === match[3]))));
-        });
-      }
-      closest(selector) {
-        for (let node = this; node; node = node.parentElement) {
-          if (node.matches(selector)) return node;
-        }
-        return null;
-      }
-      contains(node) {
-        for (; node; node = node.parentElement) if (node === this) return true;
-        return false;
-      }
-      querySelectorAll(selector) {
-        return this.children.flatMap(child => [
-          ...(child.matches(selector) ? [child] : []), ...child.querySelectorAll(selector)
-        ]);
-      }
-      querySelector(selector) { return this.querySelectorAll(selector)[0] ?? null; }
-      click() { super.click(); this.onClick?.(); }
+  class BookmarkElement extends Element {
+    constructor(name, width = 40, height = 40) {
+      super(name, width, height);
+      this.children = [];
     }
-    bookmarkRoot = new BookmarkElement("main", 800, 600);
+    append(...children) {
+      for (const child of children) {
+        child.parentElement = this;
+        this.children.push(child);
+      }
+    }
+    matches(selector) {
+      return selector.split(",").some(part => {
+        part = part.trim();
+        if (part === ":disabled") return Boolean(this.disabled);
+        if (part === "svg title") return this.localName === "title" && this.parentElement?.localName === "svg";
+        const match = /^(\w+)?(?:\[([\w-]+)(?:=["']?([^"'\]]+)["']?)?\])?$/.exec(part);
+        return Boolean(match && (!match[1] || match[1] === this.localName) &&
+          (!match[2] || (this.attributes.has(match[2]) &&
+            (match[3] === undefined || this.getAttribute(match[2]) === match[3]))));
+      });
+    }
+    closest(selector) {
+      for (let node = this; node; node = node.parentElement) {
+        if (node.matches(selector)) return node;
+      }
+      return null;
+    }
+    contains(node) {
+      for (; node; node = node.parentElement) if (node === this) return true;
+      return false;
+    }
+    querySelectorAll(selector) {
+      return this.children.flatMap(child => [
+        ...(child.matches(selector) ? [child] : []), ...child.querySelectorAll(selector)
+      ]);
+    }
+    querySelector(selector) { return this.querySelectorAll(selector)[0] ?? null; }
+    click() { super.click(); this.onClick?.(); }
+  }
+  const bookmarkRoot = new BookmarkElement("main", 800, 600);
+  document.body = new BookmarkElement("body", 1000, 800);
+  document.body.append(bookmarkRoot);
+  const errorHeading = new BookmarkElement(options.errorTag ?? "h2", 600, 100);
+  if (options.errorRole) errorHeading.setAttribute("role", options.errorRole);
+  errorHeading.hidden = options.errorHidden ?? false;
+  errorHeading.textContent = options.text ?? errorText;
+  (options.errorOutsideMain ? document.body : bookmarkRoot).append(errorHeading);
+  Object.defineProperty(document.body, "innerText", {
+    get() { return [errorHeading.textContent, options.commentText, options.captionText].filter(Boolean).join(" "); },
+    set(value) { errorHeading.textContent = value; }
+  });
+  if (options.bookmarks || options.articles) {
     for (const articleConfig of options.articles ?? [options]) {
       const article = new BookmarkElement(articleConfig.noArticle ? "div" : "article", 600, 600);
       bookmarkArticles.push(article);
@@ -140,8 +151,20 @@ async function fixture(options = {}) {
       media.push(image);
       bookmarkRoot.append(article);
       article.append(image);
+      if (options.offscreen) image.top = 1000;
+      if (options.commentText) {
+        const comment = new BookmarkElement(options.commentHeading ? "h2" : "span");
+        comment.textContent = options.commentText;
+        article.append(comment);
+      }
+      if (options.captionText) {
+        const caption = new BookmarkElement("p");
+        caption.textContent = options.captionText;
+        article.append(caption);
+      }
       for (const config of articleConfig.bookmarks ?? []) {
         const button = new BookmarkElement("button");
+        if (options.offscreen) button.top = 1000;
         const label = config.icon ? new BookmarkElement("svg", 24, 24) : button;
         if (config.icon) button.append(label);
         let saved = config.saved ?? true;
@@ -168,11 +191,11 @@ async function fixture(options = {}) {
   }
   document.createElement = () => host;
   document.documentElement = { append(node) { node.isConnected = true; } };
-  document.querySelector = selector => bookmarkRoot && selector === "main, [role='main']" ? bookmarkRoot : null;
+  document.querySelector = selector => document.body.querySelector(selector);
   document.querySelectorAll = selector => {
     if (selector === "video, img, canvas") return media;
     if (selector === "video") return media.filter(item => item.localName === "video");
-    return [];
+    return document.body.querySelectorAll(selector);
   };
   const window = new Element("window");
   const location = new URL(options.url ?? "https://www.instagram.com/reel/a/");
@@ -461,6 +484,50 @@ test("Failed restore preserves the retry flow and confirms only after a successf
   assert.equal(f.count("restored"), 1);
   assert.equal(f.element("restore").hidden, true);
 });
+
+for (const kind of ["comment", "caption", "comment heading"]) {
+  test("A loaded post's " + kind + " cannot mark offscreen media and bookmark unavailable", async () => {
+    const f = await fixture({ text: "A loaded post", offscreen: true, bookmarks: [{ saved: true }],
+      ...(kind === "caption" ? { captionText: errorText } : { commentText: errorText, commentHeading: kind === "comment heading" }) });
+    assert.ok(f.document.body.innerText.includes("this page isn't available"));
+    assert.ok(f.media[0].getBoundingClientRect().top > 800);
+    assert.ok(f.bookmarkControls[0].button.getBoundingClientRect().top > 800);
+    await f.tick(12000);
+    await f.mutate();
+    await f.tick(1500);
+    assert.equal(f.count("unavailable"), 0);
+    assert.equal(f.count("decision"), 0);
+    assert.equal(f.clicks, 0);
+    assert.equal(f.element("bar").hidden, false);
+  });
+}
+
+for (const [name, options] of [
+  ["ordinary page text", { errorTag: "p" }],
+  ["hidden error heading", { errorHidden: true }],
+  ["heading outside main content", { errorOutsideMain: true }],
+  ["heading quoting the phrase", { text: "Comments about this page isn't available" }]
+]) {
+  test("Unavailable text requires a page-level error area: " + name, async () => {
+    const f = await fixture(options);
+    await f.tick(12000);
+    assert.equal(f.count("unavailable"), 0);
+  });
+}
+
+for (const [name, options] of [
+  ["h1", { errorTag: "h1" }],
+  ["ARIA heading", { errorTag: "div", errorRole: "heading" }]
+]) {
+  test("A visible page-level " + name + " error still requires two-check confirmation", async () => {
+    const f = await fixture(options);
+    await f.tick(1199);
+    assert.equal(f.count("unavailable"), 0);
+    await f.tick(1);
+    assert.equal(f.count("unavailable"), 1);
+    assert.equal(f.clicks, 0);
+  });
+}
 
 test("Detection confirms the error phrase for 1200ms, logs its signal once, and never clicks", async () => {
   const f = await fixture();

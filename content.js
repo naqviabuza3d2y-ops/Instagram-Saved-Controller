@@ -473,9 +473,15 @@
   }
 
   function unavailableSignals() {
-    const text = (document.body?.innerText ?? "").slice(0, 3000)
-      .replace(/’/g, "'").replace(/\s+/g, " ").toLowerCase();
-    const signals = UNAVAILABLE_PHRASES.filter(phrase => text.includes(phrase)).map(phrase => `text: ${phrase}`);
+    const main = document.querySelector("main, [role='main']");
+    // Page-level error headings are evidence; captions and comments inside posts are not.
+    const titles = [...(main?.querySelectorAll('h1, h2, [role="heading"]') ?? [])]
+      .filter(heading => visible(heading) && !heading.closest('article, [role="article"]'))
+      .map(heading => (heading.textContent ?? "").slice(0, 3000)
+        .replace(/’/g, "'").replace(/\s+/g, " ").trim().toLowerCase().split(/[.!?]/, 1)[0]);
+    const signals = UNAVAILABLE_PHRASES.filter(phrase => titles.some(title =>
+      title === phrase || title === "sorry, " + phrase
+    )).map(phrase => `text: ${phrase}`);
     const navigation = performance.getEntriesByType("navigation")[0];
     // A navigation entry can outlive a page change made by Instagram's SPA.
     if (navigation?.responseStatus === 404 &&
