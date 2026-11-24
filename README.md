@@ -128,6 +128,8 @@ Detection looks for no bookmark control, no visible media, and either the Englis
 |---|---|
 | The review bar does not appear | Reload the extension at `chrome://extensions`, then refresh the Instagram tab. Make sure you are on `www.instagram.com` and logged in. |
 | "Couldn't verify the bookmark changed" | Check the item on Instagram. Unsave it manually or choose Review later, then continue. |
+| "This item is not in the current export. Choose Keep or Unsave." | This appears when you choose Review later on an Undo item from an older export that is absent from the current export. Keep, Unsave, and Restore still work on that item. |
+| "Saved data is from an unsupported version. Re-import your export to continue." | Re-import your `saved_posts.json` in the popup. This replaces unsupported saved data and works even if a review or Undo is open. |
 | Review paused after unavailable items | Check you are logged in and Instagram loads normally, then resume. Use **Recheck unavailable items** if needed. |
 | Import says the file is invalid | Make sure you chose `saved_posts.json` from a JSON-format export, not the HTML export. |
 | Nothing happens after an update | Reload the extension and refresh all Instagram tabs. |
