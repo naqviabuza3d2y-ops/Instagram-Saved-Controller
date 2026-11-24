@@ -84,17 +84,11 @@ function Expand-UpdateFiles {
     }
 }
 
-function Invoke-ZipUpdate {
-    param(
-        [string]$InstallDirectory = $PSScriptRoot,
-        [scriptblock]$DownloadArchive = { param($uri, $destination) Get-UpdateArchive $uri $destination }
-    )
+function Get-UpdateInstallation {
+    param([string]$InstallDirectory)
     $install = (Get-Item -LiteralPath $InstallDirectory -Force).FullName
     if (!(Test-Path -LiteralPath (Join-Path $install 'manifest.json') -PathType Leaf)) {
         throw 'Keep Update.cmd and Update.ps1 in the installed extension folder, beside manifest.json.'
-    }
-    if (Test-Path -LiteralPath (Join-Path $install '.git')) {
-        throw 'This is a Git checkout. Use git pull instead of the ZIP updater.'
     }
     if ((Get-Item -LiteralPath $install -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) {
         throw 'Run the updater from an ordinary extension folder, not a directory link.'
@@ -104,20 +98,105 @@ function Invoke-ZipUpdate {
     if ($installed.name -ne 'Instagram Saved Review' -or $installed.manifest_version -ne 3) {
         throw 'This folder is not an Instagram Saved Review installation.'
     }
+    return $install
+}
+
+function Open-UpdateLock {
+    param([string]$InstallDirectory)
+    $lockPath = Join-Path $InstallDirectory '.update.lock'
+    Assert-UpdateFile $lockPath
+    try {
+        return [IO.FileStream]::new($lockPath, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite,
+            [IO.FileShare]::None, 4096, [IO.FileOptions]::DeleteOnClose)
+    } catch { throw 'Cannot lock this installation. Another update may be running, or the folder is not writable.' }
+}
+
+function Show-UpdateInstructions {
+    Write-Host 'Saved progress stays in Chrome; this helper never accesses browser profiles.'
+    Write-Host 'Next: open chrome://extensions, click Reload for Instagram Saved Review, then refresh Instagram tabs.'
+    Write-Host 'Use Start review to resume. Do not remove or re-add the extension, or move its folder.'
+}
+
+function Invoke-UpdateGit {
+    param([string]$GitPath, [string]$InstallDirectory, [string[]]$Arguments)
+    $previousPreference = $ErrorActionPreference
+    try {
+        # Windows PowerShell treats native stderr as errors, even for successful Git progress.
+        $ErrorActionPreference = 'Continue'
+        $output = & $GitPath -C $InstallDirectory @Arguments 2>&1
+        $code = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $previousPreference }
+    $message = ($output | ForEach-Object { $_.ToString() }) -join "`n"
+    if ($code -ne 0) { throw "git $($Arguments -join ' ') failed. $message" }
+    return $message
+}
+
+function Invoke-GitUpdate {
+    param([string]$InstallDirectory)
+    $install = Get-UpdateInstallation $InstallDirectory
+    $git = Get-Command git -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (!$git) { throw 'Git checkout detected, but Git is not installed or is not on PATH. Install Git for Windows and retry. No ZIP update was attempted.' }
+    $lock = $null
+    $previousPrompt = $env:GIT_TERMINAL_PROMPT
+    $previousInteractive = $env:GCM_INTERACTIVE
+    try {
+        $lock = Open-UpdateLock $install
+        $env:GIT_TERMINAL_PROMPT = '0'
+        $env:GCM_INTERACTIVE = 'Never'
+        $root = Invoke-UpdateGit $git.Source $install @('rev-parse', '--show-toplevel')
+        if ((Get-Item -LiteralPath $root -Force).FullName -ne $install) {
+            throw 'The extension folder must be the root of its Git checkout.'
+        }
+        try { $null = Invoke-UpdateGit $git.Source $install @('symbolic-ref', '--quiet', 'HEAD') }
+        catch { throw 'Git is in detached HEAD state. Switch to your update branch and retry.' }
+        $status = Invoke-UpdateGit $git.Source $install @('status', '--porcelain', '--untracked-files=normal')
+        if ($status) { throw 'Git checkout has local changes or untracked files. Commit, stash, or move those files before updating. Nothing was discarded.' }
+        try { $null = Invoke-UpdateGit $git.Source $install @('rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}') }
+        catch { throw 'The current Git branch has no upstream. Configure its tracking branch and retry.' }
+        Write-Host 'Git checkout detected. Updating the current branch with git pull --ff-only...'
+        Write-Host (Invoke-UpdateGit $git.Source $install @('pull', '--ff-only'))
+        Show-UpdateInstructions
+    } finally {
+        $env:GIT_TERMINAL_PROMPT = $previousPrompt
+        $env:GCM_INTERACTIVE = $previousInteractive
+        if ($lock) { $lock.Dispose() }
+    }
+}
+
+function Invoke-ExtensionUpdate {
+    param(
+        [string]$InstallDirectory = $PSScriptRoot,
+        [scriptblock]$DownloadArchive = { param($uri, $destination) Get-UpdateArchive $uri $destination }
+    )
+    $install = (Get-Item -LiteralPath $InstallDirectory -Force).FullName
+    # .git can be a directory (clone) or a file (linked worktree). Git errors must never
+    # fall back to copying a ZIP over local work.
+    if (Test-Path -LiteralPath (Join-Path $install '.git')) {
+        Invoke-GitUpdate $install
+    } else {
+        Invoke-ZipUpdate -InstallDirectory $install -DownloadArchive $DownloadArchive
+    }
+}
+
+function Invoke-ZipUpdate {
+    param(
+        [string]$InstallDirectory = $PSScriptRoot,
+        [scriptblock]$DownloadArchive = { param($uri, $destination) Get-UpdateArchive $uri $destination }
+    )
+    $install = Get-UpdateInstallation $InstallDirectory
+    if (Test-Path -LiteralPath (Join-Path $install '.git')) {
+        throw 'Git checkout detected. Run Update.cmd to use git pull --ff-only instead of copying ZIP files.'
+    }
+    $installed = Get-Content -LiteralPath (Join-Path $install 'manifest.json') -Raw | ConvertFrom-Json
 
     $files = @('background.js', 'content.js', 'export.mjs', 'popup.html', 'popup.mjs',
         'README.md', 'Update.ps1', 'Update.cmd', 'manifest.json')
-    $lockPath = Join-Path $install '.update.lock'
-    Assert-UpdateFile $lockPath
     $lock = $null
     $work = $null
     $backup = $null
     $changed = [Collections.Generic.List[string]]::new()
     try {
-        try {
-            $lock = [IO.FileStream]::new($lockPath, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite,
-                [IO.FileShare]::None, 4096, [IO.FileOptions]::DeleteOnClose)
-        } catch { throw 'Cannot lock this installation. Another update may be running, or the folder is not writable.' }
+        $lock = Open-UpdateLock $install
 
         Write-Host 'Instagram Saved Review updater'
         Write-Host 'Pause review and finish any Undo before updating. Keep this extension installed in this folder.'
@@ -185,9 +264,7 @@ function Invoke-ZipUpdate {
             }
             Write-Host "Updated extension files (manifest version $version). Backup: $backup"
         }
-        Write-Host 'Saved progress stays in Chrome; this helper never accesses browser profiles.'
-        Write-Host 'Next: open chrome://extensions, click Reload for Instagram Saved Review, then refresh Instagram tabs.'
-        Write-Host 'Use Start review to resume. Do not remove or re-add the extension, or move its folder.'
+        Show-UpdateInstructions
     } finally {
         if ($lock) { $lock.Dispose() }
         if ($work -and (Test-Path -LiteralPath $work)) {
@@ -204,7 +281,7 @@ function Invoke-ZipUpdate {
 }
 
 if ($MyInvocation.InvocationName -ne '.') {
-    try { Invoke-ZipUpdate } catch {
+    try { Invoke-ExtensionUpdate } catch {
         Write-Host ('ERROR: ' + $_.Exception.Message) -ForegroundColor Red
         exit 1
     }
