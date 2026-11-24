@@ -367,14 +367,12 @@
     if (dialogs.length > 1) return null;
     const root = dialogs[0] ?? document.querySelector("main, [role='main']") ?? document;
     const articles = [...root.querySelectorAll('article, [role="article"]')].filter(visible);
-    const exact = articles.filter(article => [...article.querySelectorAll("a[href]")].some(anchor =>
-      anchor.origin === location.origin && permalink.exec(anchor.pathname)?.[1] === shortcode
-    ));
-    if (exact.length === 1) return exact[0];
-    if (exact.length > 1) return null;
-    const mediaArticles = articles.filter(hasMedia);
-    if (mediaArticles.length > 1) return null;
-    return mediaArticles[0] ?? (hasMedia(root) ? root : null);
+    const exact = articles.filter(article => {
+      const links = [...article.querySelectorAll("a[href]")].filter(anchor => permalink.test(anchor.pathname));
+      return links.some(anchor => anchor.origin === location.origin && permalink.exec(anchor.pathname)[1] === shortcode) &&
+        links.every(anchor => permalink.exec(anchor.pathname)[1] === shortcode);
+    });
+    return exact.length === 1 ? exact[0] : null;
   }
 
   function bookmark() {

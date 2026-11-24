@@ -81,8 +81,9 @@ async function fixture(options = {}) {
   // A small DOM tree for the real bookmarkScope()/bookmark() selectors.
   // Clicks change labels, as Instagram does, rather than stubbing bookmark().
   const bookmarkControls = [];
+  const bookmarkArticles = [];
   let bookmarkRoot;
-  if (options.bookmarks) {
+  if (options.bookmarks || options.articles) {
     class BookmarkElement extends Element {
       constructor(name, width = 40, height = 40) {
         super(name, width, height);
@@ -124,39 +125,45 @@ async function fixture(options = {}) {
       click() { super.click(); this.onClick?.(); }
     }
     bookmarkRoot = new BookmarkElement("main", 800, 600);
-    const article = new BookmarkElement("article", 600, 600);
-    const anchor = new BookmarkElement("a");
-    const permalink = new URL(options.url ?? "https://www.instagram.com/reel/a/");
-    anchor.setAttribute("href", permalink.href);
-    anchor.origin = permalink.origin;
-    anchor.pathname = permalink.pathname;
-    const image = new BookmarkElement("img", 400, 500);
-    media.push(image);
-    bookmarkRoot.append(article);
-    article.append(anchor, image);
-    for (const config of options.bookmarks) {
-      const button = new BookmarkElement("button");
-      const label = config.icon ? new BookmarkElement("svg", 24, 24) : button;
-      if (config.icon) button.append(label);
-      let saved = config.saved ?? true;
-      const render = () => {
-        label.setAttribute("aria-label", saved ? "Unsave" : "Save");
-        button.setAttribute("aria-pressed", String(saved));
-      };
-      render();
-      if (config.conflictingLabel) {
-        const title = new BookmarkElement("title");
-        title.textContent = "Save";
-        label.append(title);
+    for (const articleConfig of options.articles ?? [options]) {
+      const article = new BookmarkElement(articleConfig.noArticle ? "div" : "article", 600, 600);
+      bookmarkArticles.push(article);
+      for (const href of articleConfig.articleLinks ?? [articleConfig.articleUrl ?? options.url ?? "https://www.instagram.com/reel/a/"]) {
+        const anchor = new BookmarkElement("a");
+        const permalink = new URL(href);
+        anchor.setAttribute("href", permalink.href);
+        anchor.origin = permalink.origin;
+        anchor.pathname = permalink.pathname;
+        article.append(anchor);
       }
-      button.onClick = () => {
-        if (config.changeOnClick === false) return;
-        const change = () => { saved = !saved; render(); };
-        if (config.transitionDelayMs) schedule(change, config.transitionDelayMs);
-        else change();
-      };
-      article.append(button);
-      bookmarkControls.push({ button, label, get saved() { return saved; } });
+      const image = new BookmarkElement("img", 400, 500);
+      media.push(image);
+      bookmarkRoot.append(article);
+      article.append(image);
+      for (const config of articleConfig.bookmarks ?? []) {
+        const button = new BookmarkElement("button");
+        const label = config.icon ? new BookmarkElement("svg", 24, 24) : button;
+        if (config.icon) button.append(label);
+        let saved = config.saved ?? true;
+        const render = () => {
+          label.setAttribute("aria-label", saved ? "Unsave" : "Save");
+          button.setAttribute("aria-pressed", String(saved));
+        };
+        render();
+        if (config.conflictingLabel) {
+          const title = new BookmarkElement("title");
+          title.textContent = "Save";
+          label.append(title);
+        }
+        button.onClick = () => {
+          if (config.changeOnClick === false) return;
+          const change = () => { saved = !saved; render(); };
+          if (config.transitionDelayMs) schedule(change, config.transitionDelayMs);
+          else change();
+        };
+        article.append(button);
+        bookmarkControls.push({ button, label, get saved() { return saved; } });
+      }
     }
   }
   document.createElement = () => host;
@@ -251,7 +258,7 @@ async function fixture(options = {}) {
   }
   await flush();
   return {
-    document, window, state, media, element, shadow, host, location, messages, debug, tick, bookmarkControls,
+    document, window, state, media, element, shadow, host, location, messages, debug, tick, bookmarkControls, bookmarkArticles,
     get navigationReads() { return navigationReads; }, get clicks() { return clicks; },
     get observerCount() { return observers.size; },
     count(type) { return messages.filter(message => message.type === type).length; },
@@ -291,6 +298,73 @@ async function fixture(options = {}) {
     image(width, height) { const item = new Element("img", width, height); media.push(item); return item; }
   };
 }
+
+test("Unsave refuses the only visible article when its permalink belongs to a different post", async () => {
+  const f = await fixture({ url: "https://www.instagram.com/reel/a/",
+    articleUrl: "https://www.instagram.com/reel/b/", bookmarks: [{ saved: true, icon: true }] });
+  await f.action("unsaved");
+  await f.tick(3000);
+  assert.equal(f.clicks, 0);
+  assert.equal(f.count("decision"), 0);
+  assert.equal(f.bookmarkControls[0].saved, true);
+  assert.equal(f.location.pathname, "/reel/a/");
+  assert.equal(f.element("bar").hidden, false);
+  assert.match(f.element("status").textContent, /Bookmark unavailable/);
+});
+
+for (const [name, options] of [
+  ["no permalink", { articleLinks: [] }],
+  ["conflicting post permalinks", { articleLinks: ["https://www.instagram.com/reel/a/", "https://www.instagram.com/p/b/"] }],
+  ["no article", { noArticle: true }]
+]) {
+  test("Unsave requires a positively identified article: " + name, async () => {
+    const f = await fixture({ ...options, bookmarks: [{ saved: true }] });
+    await f.action("unsaved");
+    await f.tick(3000);
+    assert.equal(f.clicks, 0);
+    assert.equal(f.count("decision"), 0);
+    assert.equal(f.element("bar").hidden, false);
+  });
+}
+
+for (const type of ["p", "reel"]) {
+  test("Unsave still verifies a matching " + type + " article", async () => {
+    const f = await fixture({ url: "https://www.instagram.com/" + type + "/a/", bookmarks: [{ saved: true, icon: true }] });
+    await f.action("unsaved");
+    await f.tick(160);
+    assert.equal(f.clicks, 1);
+    assert.equal(f.bookmarkControls[0].saved, false);
+    assert.deepEqual(f.messages.filter(message => message.type === "decision"),
+      [{ type: "decision", page: f.location.href, decision: "unsaved" }]);
+  });
+}
+
+test("Unsave selects only the matching post among several feed articles", async () => {
+  const f = await fixture({ url: "https://www.instagram.com/p/a/", articles: [
+    { articleUrl: "https://www.instagram.com/p/b/", bookmarks: [{ saved: true }] },
+    { articleUrl: "https://www.instagram.com/p/a/", bookmarks: [{ saved: true, icon: true }] },
+    { articleUrl: "https://www.instagram.com/reel/c/", bookmarks: [{ saved: true }] }
+  ] });
+  await f.action("unsaved");
+  await f.tick(160);
+  assert.equal(f.clicks, 1);
+  assert.deepEqual(f.bookmarkControls.map(control => control.saved), [true, false, true]);
+  assert.equal(f.count("decision"), 1);
+});
+
+test("A refused Unsave can be retried after the matching article loads", async () => {
+  const f = await fixture({ articleUrl: "https://www.instagram.com/reel/b/", bookmarks: [{ saved: true }] });
+  await f.action("unsaved");
+  await f.tick(3000);
+  assert.equal(f.clicks, 0);
+  const anchor = f.bookmarkArticles[0].querySelector("a[href]");
+  anchor.setAttribute("href", f.location.href);
+  anchor.pathname = f.location.pathname;
+  await f.action("unsaved");
+  await f.tick(160);
+  assert.equal(f.clicks, 1);
+  assert.equal(f.count("decision"), 1);
+});
 
 test("Ambiguous bookmark buttons refuse Unsave without clicking or recording a decision", async () => {
   const f = await fixture({ bookmarks: [{ saved: true }, { saved: true, icon: true }] });
