@@ -97,4 +97,4 @@ window.addEventListener("keydown", event => {
   event.preventDefault();
   undoLast();
 });
-run(showSummary);
+run(() => {});

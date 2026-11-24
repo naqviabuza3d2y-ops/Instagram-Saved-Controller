@@ -81,6 +81,8 @@ Shortcuts are ignored while you are typing in a text field. You can also drag th
 - **Unsave** clicks Instagram's visible bookmark, checks that it now shows the unsaved state, and then advances. If the extension cannot find or verify the bookmark, it stays on the item so you can unsave it yourself or choose Review later.
 - **Review later** makes no decision. The item moves to the end of the queue, after all other new items. If it is the last item left, Review later is refused and you must Keep or Unsave.
 
+Summary categories (new, review later, kept, unsaved, and unavailable) are disjoint: each imported item counts once. A previously kept item deferred after Undo counts only as review later, while its stored Keep decision is preserved. Re-review passes report their own progress and deferred count separately.
+
 ### Undo
 
 Click **Undo** or press `Ctrl+Z` to re-save the most recently unsaved post in the current review tab. Then choose Keep, Unsave, or Review later to continue. Posts and reels share one history of the last five unsaves. A failed restore stays in the history so you can retry.
@@ -168,5 +170,11 @@ These are planned improvements. They are ideas, not promises, and have no dates.
 Have an idea? Open an issue.
 
 ## Contributing
+
+Run the full automated suite from the repository root with Node.js 24 or later:
+
+```sh
+node --test tests/*.test.mjs
+```
 
 Issues and pull requests are welcome. Please keep changes focused, describe what you changed and why, and test a full review (including a removed post that redirects to a creator's profile) before submitting. Do not modify the unavailable-post detection logic without discussing it first, since it handles tricky Instagram behavior.
