@@ -145,6 +145,7 @@ async function fixture(options = {}) {
         anchor.setAttribute("href", permalink.href);
         anchor.origin = permalink.origin;
         anchor.pathname = permalink.pathname;
+        if (href === articleConfig.timestampUrl) anchor.append(new BookmarkElement("time"));
         article.append(anchor);
       }
       const image = new BookmarkElement("img", 400, 500);
@@ -335,18 +336,64 @@ test("Unsave refuses the only visible article when its permalink belongs to a di
   assert.match(f.element("status").textContent, /Bookmark unavailable/);
 });
 
-for (const [name, options] of [
-  ["no permalink", { articleLinks: [] }],
-  ["conflicting post permalinks", { articleLinks: ["https://www.instagram.com/reel/a/", "https://www.instagram.com/p/b/"] }],
-  ["no article", { noArticle: true }]
+test("Unsave refuses conflicting post permalinks without a primary timestamp link", async () => {
+  const f = await fixture({ articleLinks: ["https://www.instagram.com/reel/a/", "https://www.instagram.com/p/b/"],
+    bookmarks: [{ saved: true }] });
+  await f.action("unsaved");
+  await f.tick(3000);
+  assert.equal(f.clicks, 0);
+  assert.equal(f.count("decision"), 0);
+  assert.equal(f.element("bar").hidden, false);
+});
+
+for (const [name, layout] of [
+  ["an article without a self-link", { articleLinks: [] }],
+  ["a reel player without an article", { noArticle: true }],
+  ["a reel player without an article or self-link", { noArticle: true, articleLinks: [] }]
 ]) {
-  test("Unsave requires a positively identified article: " + name, async () => {
-    const f = await fixture({ ...options, bookmarks: [{ saved: true }] });
+  for (const saved of [true, false]) {
+    test((saved ? "Unsave" : "Undo") + " supports " + name, async () => {
+      const f = await fixture({ ...layout, bookmarks: [{ saved, icon: true, transitionDelayMs: 320 }],
+        ...(saved ? {} : { state: { restoring: true } }) });
+      if (saved) await f.action("unsaved");
+      assert.equal(f.clicks, 1);
+      assert.equal(f.count(saved ? "decision" : "restored"), 0);
+      await f.tick(320);
+      assert.equal(f.bookmarkControls[0].saved, !saved);
+      assert.equal(f.count(saved ? "decision" : "restored"), 1);
+    });
+  }
+}
+
+test("A primary timestamp identifies a reel despite links to other posts in its caption", async () => {
+  const self = "https://www.instagram.com/reel/a/";
+  const f = await fixture({ articles: [{ timestampUrl: self,
+    articleLinks: [self, "https://www.instagram.com/p/b/"], bookmarks: [{ saved: true }] }] });
+  await f.action("unsaved");
+  await f.tick(160);
+  assert.equal(f.clicks, 1);
+  assert.equal(f.count("decision"), 1);
+});
+
+for (const [name, articles] of [
+  ["two unidentified reels", [{ articleLinks: [], bookmarks: [{ saved: true }] },
+    { articleLinks: [], bookmarks: [{ saved: true }] }]],
+  ["a mismatched player without an article", [{ noArticle: true,
+    articleUrl: "https://www.instagram.com/reel/b/", bookmarks: [{ saved: true }] }]],
+  ["a different post's timestamp and a matching link in its comments", [{
+    timestampUrl: "https://www.instagram.com/reel/b/",
+    articleLinks: ["https://www.instagram.com/reel/b/", "https://www.instagram.com/reel/a/"],
+    bookmarks: [{ saved: true }] }]],
+  ["multiple bookmarks in an unidentified player", [{ noArticle: true, articleLinks: [],
+    bookmarks: [{ saved: true }, { saved: true }] }]]
+]) {
+  test("Unsave still refuses " + name, async () => {
+    const f = await fixture({ articles });
     await f.action("unsaved");
     await f.tick(3000);
     assert.equal(f.clicks, 0);
     assert.equal(f.count("decision"), 0);
-    assert.equal(f.element("bar").hidden, false);
+    assert.ok(f.bookmarkControls.every(control => control.saved));
   });
 }
 
