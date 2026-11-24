@@ -367,12 +367,23 @@
     if (dialogs.length > 1) return null;
     const root = dialogs[0] ?? document.querySelector("main, [role='main']") ?? document;
     const articles = [...root.querySelectorAll('article, [role="article"]')].filter(visible);
-    const exact = articles.filter(article => {
-      const links = [...article.querySelectorAll("a[href]")].filter(anchor => permalink.test(anchor.pathname));
-      return links.some(anchor => anchor.origin === location.origin && permalink.exec(anchor.pathname)[1] === shortcode) &&
-        links.every(anchor => permalink.exec(anchor.pathname)[1] === shortcode);
+    // Reel players need not use <article> or link back to their own permalink.
+    const scopes = articles.length ? articles : hasMedia(root) ? [root] : [];
+    const candidates = scopes.map(scope => {
+      const links = [...scope.querySelectorAll("a[href]")].filter(anchor =>
+        anchor.origin === location.origin && permalink.test(anchor.pathname));
+      // A post's timestamp identifies its owner; caption/comment links may refer elsewhere.
+      const timestamps = links.filter(anchor => anchor.querySelector("time"));
+      const ids = new Set((timestamps.length ? timestamps : links).map(anchor =>
+        permalink.exec(anchor.pathname)[1]));
+      return { scope, ids };
     });
-    return exact.length === 1 ? exact[0] : null;
+    const exact = candidates.filter(candidate => candidate.ids.size === 1 && candidate.ids.has(shortcode));
+    if (exact.length) return exact.length === 1 ? exact[0].scope : null;
+    // Without an identity link, accept only the sole visible media scope. An explicit
+    // different ID is never a fallback, and bookmark() still requires one unique control.
+    const media = candidates.filter(candidate => hasMedia(candidate.scope));
+    return media.length === 1 && media[0].ids.size === 0 ? media[0].scope : null;
   }
 
   function bookmark() {
