@@ -50,7 +50,11 @@ function normalizeStoredData(data) {
   const unsupported = () => { throw new Error(UNSUPPORTED_DATA_MESSAGE); };
   if (!record(data) || data.schema !== schema || !ids(data.ids) ||
       new Set(data.ids).size !== data.ids.length || !record(data.decisions) ||
-      !Object.values(data.decisions).every(decision) || !ids(data.deferred)) unsupported();
+      !Object.values(data.decisions).every(decision)) unsupported();
+  const imported = new Set(data.ids);
+  const importedIds = value => ids(value) && value.every(id => imported.has(id));
+  const deferrals = value => importedIds(value) && new Set(value).size === value.length;
+  if (!deferrals(data.deferred)) unsupported();
   if (data.types !== undefined && (!record(data.types) ||
       !Object.values(data.types).every(value => ["p", "reel", "tv"].includes(value)))) unsupported();
   if (data.undoHistory !== undefined && (!Array.isArray(data.undoHistory) ||
@@ -60,8 +64,8 @@ function normalizeStoredData(data) {
   const replayFields = ["replayIndex", "replayId", "replayDeferred", "replayReviewed", "replayProgress"];
   if (replayFields.some(key => Object.hasOwn(data, key))) {
     if (!counter(data.replayIndex) || data.replayIndex > data.ids.length ||
-        typeof data.replayId !== "string" || !data.replayId || !ids(data.replayDeferred) ||
-        (data.replayReviewed !== undefined && !ids(data.replayReviewed)) ||
+        typeof data.replayId !== "string" || !data.replayId || !deferrals(data.replayDeferred) ||
+        (data.replayReviewed !== undefined && !importedIds(data.replayReviewed)) ||
         !record(data.replayProgress) || !counter(data.replayProgress.decided) ||
         !counter(data.replayProgress.total)) unsupported();
   }
@@ -523,6 +527,9 @@ async function handleDecision(message, { run, data, undo, onUndoItem, item, firs
   const samePass = progress && undo?.replayId && undo.replayId === data.replayId;
   const wasDeferred = progress && data.replayDeferred.includes(item.id);
   if (decision === "later") {
+    if (onUndoItem && !data.ids.includes(item.id)) {
+      throw new Error("This item is not in the current export. Choose Keep or Unsave.");
+    }
     const remaining = progress ? replayIds(data) : pendingIds(data);
     if (!remaining.some(id => id !== item.id) && !run?.slots.some(slot => slot.id !== item.id)) {
       throw new Error("This is the last item left. Choose Keep or Unsave.");

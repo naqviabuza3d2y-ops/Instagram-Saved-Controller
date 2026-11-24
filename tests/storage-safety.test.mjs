@@ -18,6 +18,8 @@ export const invalidDataCases = [
   ["invalid decision value", { ...valid(), decisions: { a: "skipped" } }],
   ["missing deferred list", { ...valid(), deferred: undefined }],
   ["invalid deferred IDs", { ...valid(), deferred: [null] }],
+  ["deferred ID outside export", { ...valid(), deferred: ["ghost"] }],
+  ["duplicate deferred IDs", { ...valid(), deferred: ["a", "a"] }],
   ["invalid types", { ...valid(), types: { a: "unsupported" } }],
   ["invalid history", { ...valid(), undoHistory: {} }],
   ["old Undo previous value", { ...valid(), undoHistory: [{ id: "a", url: "https://www.instagram.com/p/a/", previous: "skipped" }] }],
@@ -27,6 +29,12 @@ export const invalidDataCases = [
   ["invalid replay counter", { ...valid(), replayIndex: 0, replayId: "pass", replayDeferred: [],
     replayProgress: { decided: -1, total: 1 } }],
   ["invalid replay list", { ...valid(), replayIndex: 0, replayId: "pass", replayDeferred: null,
+    replayProgress: { decided: 0, total: 1 } }],
+  ["replay deferred ID outside export", { ...valid(), replayIndex: 0, replayId: "pass", replayDeferred: ["ghost"],
+    replayProgress: { decided: 0, total: 1 } }],
+  ["duplicate replay deferred IDs", { ...valid(), replayIndex: 0, replayId: "pass", replayDeferred: ["a", "a"],
+    replayProgress: { decided: 0, total: 1 } }],
+  ["reviewed ID outside export", { ...valid(), replayIndex: 0, replayId: "pass", replayDeferred: [], replayReviewed: ["ghost"],
     replayProgress: { decided: 0, total: 1 } }],
   ["invalid replay cursor", { ...valid(), replayIndex: 2, replayId: "pass", replayDeferred: [],
     replayProgress: { decided: 0, total: 1 } }]
@@ -159,6 +167,90 @@ test("Supported imports still require pausing and leave active run, Undo, and co
     { error: "Pause the current review before importing." });
   assert.deepEqual(mutations(f.effects), []);
   assert.deepEqual(f.snapshot(), before);
+});
+
+test("Re-import filters decisions and deferrals to the new export and drops every replay field", async () => {
+  const f = fixture();
+  delete f.session.run;
+  Object.assign(f.local.data, {
+    ids: ["a", "b", "c", "d"], types: { a: "p", b: "reel", c: "tv", d: "p" },
+    decisions: { a: "unsaved", c: "kept" }, deferred: ["d", "b"],
+    undoHistory: [{ id: "a", url: "https://www.instagram.com/p/a/", previous: "kept" }],
+    replayIndex: 1, replayId: "old-pass", replayDeferred: ["d", "b"], replayReviewed: ["c"],
+    replayProgress: { decided: 1, total: 3 }
+  });
+  const history = structuredClone(f.local.data.undoHistory);
+  const before = f.snapshot();
+  assert.deepEqual(await f.popup("import", { ids: ["b", "c", "new"],
+    types: { b: "reel", c: "tv", new: "p" } }), {});
+  assert.deepEqual(f.local.data, { schema: 1, ids: ["b", "c", "new"],
+    types: { b: "reel", c: "tv", new: "p" }, decisions: { c: "kept" }, deferred: ["b"], undoHistory: history });
+  assert.deepEqual(mutations(f.effects).map(effect => effect.op), ["local.set"]);
+  assert.deepEqual(f.session, before.session);
+  assert.deepEqual(f.snapshot().tabs, before.tabs);
+  const summary = await f.popup("summary");
+  assert.deepEqual([summary.total, summary.pending, summary.later, summary.kept], [3, 1, 1, 1]);
+  assert.equal(summary.replaying, false);
+});
+
+async function restoreHistoricalItem(replay) {
+  const f = fixture();
+  delete f.session.run;
+  f.local.data.decisions.a = "unsaved";
+  f.local.data.undoHistory = [{ id: "a", url: "https://www.instagram.com/p/a/", previous: "kept" }];
+  assert.deepEqual(await f.popup("import", { ids: ["b", "c"], types: { b: "reel", c: "tv" } }), {});
+  if (replay) assert.deepEqual(await f.popup("restart", { size: 1, windowId: 1 }), {});
+  assert.deepEqual(await f.popup("undo", { windowId: 1 }), {});
+  const tab = f.session.undo.tab;
+  assert.deepEqual(await f.content("state", {}, tab), { restoring: true });
+  assert.deepEqual(await f.content("restored", {}, tab), { restored: true });
+  return { f, tab };
+}
+
+for (const replay of [false, true]) {
+  test("Historical Undo outside the " + (replay ? "replay" : "normal") + " export rejects Review later without side effects", async () => {
+    const { f, tab } = await restoreHistoricalItem(replay);
+    const before = f.snapshot();
+    f.effects.length = 0;
+    assert.deepEqual(await f.content("decision", { decision: "later" }, tab),
+      { error: "This item is not in the current export. Choose Keep or Unsave." });
+    // Preserve the existing active-tab check; this read must not be followed by a mutation.
+    assert.deepEqual(mutations(f.effects), [{ op: "tabs.get", args: [tab] }]);
+    assert.deepEqual(f.snapshot(), before);
+    assert.equal((await f.content("state", {}, tab)).current, true);
+    assert.equal((await f.popup("summary")).error, undefined);
+  });
+}
+
+test("Historical Restore, Keep, and Unsave remain valid outside a different imported export", async () => {
+  for (const replay of [false, true]) {
+    for (const decision of ["kept", "unsaved"]) {
+      const { f, tab } = await restoreHistoricalItem(replay);
+      const result = await f.content("decision", { decision }, tab);
+      assert.equal(result.error, undefined);
+      assert.equal(f.local.data.decisions.a, decision);
+      assert.deepEqual(f.local.data.ids, ["b", "c"]);
+      if (decision === "unsaved") assert.equal(f.local.data.undoHistory.at(-1).id, "a");
+      const summary = await f.popup("summary");
+      assert.equal(summary.error, undefined);
+      assert.deepEqual([summary.total, summary.pending, summary.later, summary.kept, summary.unsaved], [2, 2, 0, 0, 0]);
+    }
+  }
+});
+
+test("Repeated Undo before the replay cursor advances can legitimately repeat reviewed IDs", async () => {
+  const f = fixture();
+  f.local.data.decisions.c = "unsaved";
+  f.local.data.undoHistory = [{ id: "c", url: "https://www.instagram.com/tv/c/", previous: "kept" }];
+  assert.deepEqual(await f.popup("restart", { size: 1, windowId: 1 }), {});
+  for (let index = 0; index < 2; index++) {
+    assert.deepEqual(await f.popup("undo", { windowId: 1 }), {});
+    const tab = f.session.undo.tab;
+    assert.deepEqual(await f.content("restored", {}, tab), { restored: true });
+    assert.equal((await f.content("decision", { decision: "unsaved" }, tab)).error, undefined);
+  }
+  assert.deepEqual(f.local.data.replayReviewed, ["c", "c"]);
+  assert.equal((await f.popup("summary")).error, undefined);
 });
 
 // Every command shares the same trust/ownership boundary, including popup-only
