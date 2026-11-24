@@ -367,14 +367,12 @@
     if (dialogs.length > 1) return null;
     const root = dialogs[0] ?? document.querySelector("main, [role='main']") ?? document;
     const articles = [...root.querySelectorAll('article, [role="article"]')].filter(visible);
-    const exact = articles.filter(article => [...article.querySelectorAll("a[href]")].some(anchor =>
-      anchor.origin === location.origin && permalink.exec(anchor.pathname)?.[1] === shortcode
-    ));
-    if (exact.length === 1) return exact[0];
-    if (exact.length > 1) return null;
-    const mediaArticles = articles.filter(hasMedia);
-    if (mediaArticles.length > 1) return null;
-    return mediaArticles[0] ?? (hasMedia(root) ? root : null);
+    const exact = articles.filter(article => {
+      const links = [...article.querySelectorAll("a[href]")].filter(anchor => permalink.test(anchor.pathname));
+      return links.some(anchor => anchor.origin === location.origin && permalink.exec(anchor.pathname)[1] === shortcode) &&
+        links.every(anchor => permalink.exec(anchor.pathname)[1] === shortcode);
+    });
+    return exact.length === 1 ? exact[0] : null;
   }
 
   function bookmark() {
@@ -475,9 +473,15 @@
   }
 
   function unavailableSignals() {
-    const text = (document.body?.innerText ?? "").slice(0, 3000)
-      .replace(/’/g, "'").replace(/\s+/g, " ").toLowerCase();
-    const signals = UNAVAILABLE_PHRASES.filter(phrase => text.includes(phrase)).map(phrase => `text: ${phrase}`);
+    const main = document.querySelector("main, [role='main']");
+    // Page-level error headings are evidence; captions and comments inside posts are not.
+    const titles = [...(main?.querySelectorAll('h1, h2, [role="heading"]') ?? [])]
+      .filter(heading => visible(heading) && !heading.closest('article, [role="article"]'))
+      .map(heading => (heading.textContent ?? "").slice(0, 3000)
+        .replace(/’/g, "'").replace(/\s+/g, " ").trim().toLowerCase().split(/[.!?]/, 1)[0]);
+    const signals = UNAVAILABLE_PHRASES.filter(phrase => titles.some(title =>
+      title === phrase || title === "sorry, " + phrase
+    )).map(phrase => `text: ${phrase}`);
     const navigation = performance.getEntriesByType("navigation")[0];
     // A navigation entry can outlive a page change made by Instagram's SPA.
     if (navigation?.responseStatus === 404 &&
