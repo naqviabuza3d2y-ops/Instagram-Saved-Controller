@@ -78,9 +78,87 @@ test("Unsupported storage is replaced only by an explicit, valid popup import", 
     assert.deepEqual(f.snapshot(), before);
     assert.deepEqual(await f.popup("import", { ids: ["a"], types: { a: "p" } }), {});
     assert.deepEqual(f.local.data, valid());
-    assert.deepEqual(mutations(f.effects).map(effect => effect.op), ["local.set"]);
+    assert.deepEqual(mutations(f.effects).map(effect => effect.op), ["local.set", "session.remove"]);
     assert.deepEqual(f.session, before.session);
   }
+});
+
+function staleReview(f) {
+  // Keep the active run from fixture(); recovery must not depend on an idle setup.
+  f.session.run.size = 5;
+  f.session.run.slots.push({ id: "b", tab: 2, navigation: { url: "https://www.instagram.com/reel/b/" } });
+  f.session.undo = { id: "c", tab: 3, url: "https://www.instagram.com/tv/c/", previous: "kept" };
+  f.session.undoContext = { id: "a", tab: 1, kind: "complete" };
+}
+
+const recoveryCases = invalidDataCases.filter(([name]) =>
+  ["missing schema", "future schema", "invalid decisions"].includes(name));
+for (const [name, data] of recoveryCases) {
+  test("Recovery import replaces " + name + " with an active run, Undo, and completion context", async () => {
+    const f = fixture();
+    f.local.data = structuredClone(data);
+    staleReview(f);
+    const before = f.snapshot();
+    assert.ok(before.session.run.slots.length > 0);
+    assert.deepEqual(await f.popup("import", { ids: ["a"], types: { a: "p" } }), {});
+    assert.deepEqual(f.local.data, valid());
+    const { run, undo, undoContext, ...unrelated } = before.session;
+    assert.deepEqual(f.session, unrelated);
+    assert.deepEqual(f.snapshot().tabs, before.tabs, "Release stale ownership without operating on tabs");
+    assert.deepEqual(mutations(f.effects), [
+      { op: "local.set", args: [{ data: valid() }] },
+      { op: "session.remove", args: [["run", "undo", "undoContext"]] }
+    ]);
+    const summary = await f.popup("summary");
+    assert.equal(summary.running, false);
+    assert.equal(summary.total, 1);
+    assert.deepEqual(await f.content("state"), inactive);
+  });
+}
+
+test("Invalid recovery imports preserve unsupported data and all stale session state", async () => {
+  for (const [, data] of recoveryCases) {
+    for (const input of [
+      { ids: [], types: {} }, { ids: ["bad.id"], types: {} },
+      { ids: ["a"], types: {} }, { ids: ["a"], types: { a: "unsupported" } }
+    ]) {
+      const f = fixture();
+      f.local.data = structuredClone(data);
+      staleReview(f);
+      const before = f.snapshot();
+      assert.ok((await f.popup("import", input)).error);
+      assert.deepEqual(mutations(f.effects), []);
+      assert.deepEqual(f.snapshot(), before);
+    }
+  }
+});
+
+test("Non-import messages cannot replace unsupported data or release a stale review", async () => {
+  for (const [, data] of recoveryCases) {
+    const f = fixture();
+    f.local.data = structuredClone(data);
+    staleReview(f);
+    const before = f.snapshot();
+    for (const type of ["summary", "pause", "start", "restart", "undo", "recheckUnavailable"]) {
+      assert.deepEqual(await f.popup(type), { error: unsupportedMessage });
+    }
+    for (const type of ["state", "decision", "restored", "unavailable", "import"]) {
+      assert.deepEqual(await f.content(type, { decision: "kept", ids: ["a"], types: { a: "p" } }),
+        { error: unsupportedMessage });
+    }
+    assert.deepEqual(mutations(f.effects), []);
+    assert.deepEqual(f.snapshot(), before);
+  }
+});
+
+test("Supported imports still require pausing and leave active run, Undo, and context untouched", async () => {
+  const f = fixture();
+  staleReview(f);
+  const before = f.snapshot();
+  assert.deepEqual(await f.popup("import", { ids: ["a"], types: { a: "p" } }),
+    { error: "Pause the current review before importing." });
+  assert.deepEqual(mutations(f.effects), []);
+  assert.deepEqual(f.snapshot(), before);
 });
 
 // Every command shares the same trust/ownership boundary, including popup-only

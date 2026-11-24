@@ -378,8 +378,8 @@ async function handleAudio(message, { item, onUndoItem, undo, run }) {
   return { muted };
 }
 
-async function handleImport(message, { run, undo, data }) {
-  if (run || undo) throw new Error("Pause the current review before importing.");
+async function handleImport(message, { run, undo, data, replaceUnsupported = false }) {
+  if (!replaceUnsupported && (run || undo)) throw new Error("Pause the current review before importing.");
   const ids = [...new Set(message.ids)];
   if (!ids.length || ids.some(id => typeof id !== "string" || !/^[\w-]+$/.test(id))) {
     throw new Error("The export contains invalid media IDs.");
@@ -395,6 +395,10 @@ async function handleImport(message, { run, undo, data }) {
   const deferred = data.deferred.filter(id => imported.has(id) && !Object.hasOwn(decisions, id));
   await chrome.storage.local.set({ data: { schema, ids, types, decisions, deferred,
     undoHistory: data.undoHistory ?? [] } });
+  if (replaceUnsupported) {
+    // Release stale ownership only after a valid replacement has been saved; leave tabs alone.
+    await chrome.storage.session.remove(["run", "undo", "undoContext"]);
+  }
   return {};
 }
 
@@ -718,7 +722,7 @@ async function receive(message, sender) {
   } catch (error) {
     // Only an explicit popup import may replace unsupported data, after normal import validation.
     if (sender.tab || message.type !== "import" || error.message !== UNSUPPORTED_DATA_MESSAGE) throw error;
-    data = normalizeStoredData(undefined);
+    return handleImport(message, { data: normalizeStoredData(undefined), replaceUnsupported: true });
   }
   if (!sender.tab) undo = await getUndo();
   const undoCount = data.undoHistory?.length ?? 0;
