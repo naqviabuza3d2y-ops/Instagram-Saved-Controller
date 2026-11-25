@@ -485,10 +485,13 @@
 
   function unavailableSignals() {
     const main = document.querySelector("main, [role='main']");
-    // Page-level error headings are evidence; captions and comments inside posts are not.
-    const titles = [...(main?.querySelectorAll('h1, h2, [role="heading"]') ?? [])]
-      .filter(heading => visible(heading) && !heading.closest('article, [role="article"]'))
-      .map(heading => (heading.textContent ?? "").slice(0, 3000)
+    // Instagram also renders this error in plain spans, without any heading role.
+    // Exclude post/quoted content and containers wrapping it, so a caption or
+    // comment cannot become page-level evidence when its media is offscreen.
+    const content = 'article, [role="article"], blockquote, q, pre, code, [contenteditable], [role="textbox"]';
+    const titles = [...(main?.querySelectorAll('h1, h2, [role="heading"], p, span, div') ?? [])]
+      .filter(element => visible(element) && !element.closest(content) && !element.querySelector(content))
+      .map(element => (element.innerText ?? element.textContent ?? "").slice(0, 3000)
         .replace(/’/g, "'").replace(/\s+/g, " ").trim().toLowerCase().split(/[.!?]/, 1)[0]);
     const signals = UNAVAILABLE_PHRASES.filter(phrase => titles.some(title =>
       title === phrase || title === "sorry, " + phrase

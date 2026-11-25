@@ -126,11 +126,19 @@ async function fixture(options = {}) {
   const bookmarkRoot = new BookmarkElement("main", 800, 600);
   document.body = new BookmarkElement("body", 1000, 800);
   document.body.append(bookmarkRoot);
-  const errorHeading = new BookmarkElement(options.errorTag ?? "h2", 600, 100);
+  // Regression from the live error page on 2026-11-25: the message had no
+  // heading role. Keep plain text as the default so heading-only detection fails.
+  const errorHeading = new BookmarkElement(options.errorTag ?? "span", 600, 100);
   if (options.errorRole) errorHeading.setAttribute("role", options.errorRole);
   errorHeading.hidden = options.errorHidden ?? false;
   errorHeading.textContent = options.text ?? errorText;
-  (options.errorOutsideMain ? document.body : bookmarkRoot).append(errorHeading);
+  let errorParent = options.errorOutsideMain ? document.body : bookmarkRoot;
+  if (options.errorContainer) {
+    const container = new BookmarkElement(options.errorContainer);
+    errorParent.append(container);
+    errorParent = container;
+  }
+  errorParent.append(errorHeading);
   Object.defineProperty(document.body, "innerText", {
     get() { return [errorHeading.textContent, options.commentText, options.captionText].filter(Boolean).join(" "); },
     set(value) { errorHeading.textContent = value; }
@@ -550,10 +558,15 @@ for (const kind of ["comment", "caption", "comment heading"]) {
 }
 
 for (const [name, options] of [
-  ["ordinary page text", { errorTag: "p" }],
-  ["hidden error heading", { errorHidden: true }],
-  ["heading outside main content", { errorOutsideMain: true }],
-  ["heading quoting the phrase", { text: "Comments about this page isn't available" }]
+  ["ordinary page text quoting the phrase", { errorTag: "p", text: "Comments about this page isn't available" }],
+  ["hidden error heading", { errorTag: "h2", errorHidden: true }],
+  ["hidden plain error", { errorTag: "span", errorHidden: true }],
+  ["heading outside main content", { errorTag: "h2", errorOutsideMain: true }],
+  ["plain error outside main content", { errorTag: "span", errorOutsideMain: true }],
+  ["quoted plain error", { errorTag: "span", errorContainer: "blockquote" }],
+  ["quoted error heading", { errorTag: "h2", errorContainer: "blockquote" }],
+  ["error inside a post", { errorTag: "span", errorContainer: "article" }],
+  ["heading quoting the phrase", { errorTag: "h2", text: "Comments about this page isn't available" }]
 ]) {
   test("Unavailable text requires a page-level error area: " + name, async () => {
     const f = await fixture(options);
@@ -564,7 +577,11 @@ for (const [name, options] of [
 
 for (const [name, options] of [
   ["h1", { errorTag: "h1" }],
-  ["ARIA heading", { errorTag: "div", errorRole: "heading" }]
+  ["h2", { errorTag: "h2" }],
+  ["ARIA heading", { errorTag: "div", errorRole: "heading" }],
+  ["plain span (Instagram error layout)", { errorTag: "span", responseStatus: 200 }],
+  ["plain paragraph", { errorTag: "p" }],
+  ["plain div", { errorTag: "div" }]
 ]) {
   test("A visible page-level " + name + " error still requires two-check confirmation", async () => {
     const f = await fixture(options);
@@ -588,6 +605,22 @@ test("Detection confirms the error phrase for 1200ms, logs its signal once, and 
   assert.match(f.debug[0], /text: this page isn't available/);
   assert.equal(f.clicks, 0);
   assert.equal(f.count("decision"), 0);
+});
+
+test("A late plain-text error in a hidden queue tab is confirmed and skipped once", async () => {
+  const f = await fixture({ text: "Loading…", errorTag: "span", hidden: true, throttle: true,
+    state: { current: false, queued: true } });
+  await f.tick(12000);
+  f.document.body.innerText = errorText;
+  await f.mutate();
+  await f.tick(2999);
+  assert.equal(f.count("unavailable"), 0);
+  await f.tick(1);
+  assert.equal(f.count("unavailable"), 1);
+  await f.tick(5000);
+  assert.equal(f.count("unavailable"), 1);
+  assert.equal(f.count("decision"), 0);
+  assert.equal(f.clicks, 0);
 });
 
 test("Detection normalizes curly apostrophes and case", async () => {
@@ -814,7 +847,7 @@ test("An error replacing briefly visible media at the same URL re-arms detection
 });
 
 test("Line-wrapped error headings are recognized without widening the error phrases", async () => {
-  const f = await fixture({ text: "Sorry, this page\nisn’t\u00a0available." });
+  const f = await fixture({ errorTag: "h2", text: "Sorry, this page\nisn’t\u00a0available." });
   await f.tick(1200);
   assert.equal(f.count("unavailable"), 1);
 });

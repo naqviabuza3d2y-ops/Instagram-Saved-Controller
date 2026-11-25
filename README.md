@@ -121,7 +121,7 @@ Deleted or removed posts are skipped automatically and recorded as **unavailable
 - If **10 items in a row** look unavailable, the review pauses automatically. This protects you if you are logged out or Instagram is limiting your account. Check Instagram, then resume.
 - While paused, **Recheck unavailable items** makes them pending again.
 
-Detection looks for no bookmark control, no visible media, and either the English error text "this page isn't available" or a 404 response, confirmed again about 1.2 seconds later.
+Detection looks for no bookmark control, no visible media, and either the English error text "this page isn't available" or a 404 response, confirmed again about 1.2 seconds later. It recognizes both headings and plain-text error messages in the main content area, including errors delivered with a successful HTTP response. Captions, comments inside posts, and quoted text are excluded.
 
 ## Privacy and permissions
 
@@ -183,7 +183,6 @@ These are planned improvements. They are ideas, not promises, and have no dates.
 - Broader support for different Instagram export file formats.
 
 **Project and releases**
-- GitHub Actions for automated checks (syntax, tests, manifest validation) on every pull request.
 - Branch protection and pull-request based changes.
 - Tagged releases with a packaged ZIP.
 - Extension icons and a possible Chrome Web Store listing.
@@ -192,6 +191,10 @@ These are planned improvements. They are ideas, not promises, and have no dates.
 Have an idea? Open an issue.
 
 ## Contributing
+
+Cleanup changes must preserve existing behavior. See [AGENTS.md](AGENTS.md) for the regression requirements, including unavailable-post skipping. Keep tests for previously observed Instagram layouts even when simplifying selectors or fallbacks.
+
+The [Tests workflow](.github/workflows/tests.yml) runs on pushes and pull requests on Linux and Windows. To make passing tests a merge requirement, configure the repository's branch protection or ruleset to require both test jobs after the workflow has run on GitHub.
 
 Run the full automated suite from the repository root with Node.js 24 or later:
 
