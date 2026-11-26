@@ -45,17 +45,19 @@ The extension is not on the Chrome Web Store yet, so you install it manually in 
 
 ### Updating
 
-**Windows ZIP installs:** use the updater in the folder you originally loaded into Chrome.
+**Windows ZIP installs and Git clones:** use the updater in the folder you originally loaded into Chrome.
 
 1. Finish any Undo and click **Pause review** in the popup.
-2. Double-click **`Update.cmd`**, beside `manifest.json`. Wait for **Updated extension files** or **Already up to date**. It uses Windows PowerShell 5.1, included with Windows 10/11; no Git or administrator access is needed for a writable folder.
+2. Double-click **`Update.cmd`**, beside `manifest.json`. It detects the installation type and reports the result. It uses Windows PowerShell 5.1, included with Windows 10/11. A writable folder is required; ZIP installs do not require Git.
 3. Go to `chrome://extensions` and click the extension's **Reload** icon, then **refresh any open Instagram tabs**. Choose **Start review** to resume your remaining queue.
 
-The helper downloads the latest merged **`main` branch** from this GitHub repository over HTTPS. It validates the ZIP before installing, replaces only the extension's runtime files, README, and update helpers, and keeps code backups in `.update-backups` inside the installation folder. It does not refresh the repository's developer tests. An identical download changes no files and creates no extra backup. Download/validation failures leave the installation unchanged; if a file replacement fails, it attempts to restore the replaced files and reports the result.
+**ZIP mode:** when there is no `.git` entry, the helper downloads the latest merged **`main` branch** from this GitHub repository over HTTPS. It validates the ZIP before installing, replaces only the extension's runtime files, README, and update helpers, and keeps code backups in `.update-backups` inside the installation folder. It does not refresh the repository's developer tests. Wait for **Updated extension files** or **Already up to date**. An identical download changes no files and creates no extra backup. Download/validation failures leave the installation unchanged; if a file replacement fails, it attempts to restore the replaced files and reports the result.
+
+**Git mode:** when a `.git` directory or worktree file exists, the helper runs **`git pull --ff-only`** in that installation folder. It updates the **current branch from its configured upstream**, without switching branches. Git must be installed and on PATH. The working tree must be clean, including untracked files; commit, stash, or move local changes yourself before retrying. Ignored files remain in place. Diverged history, detached HEAD, missing upstream, authentication, and network errors stop the update and show an error. Git mode never falls back to ZIP, resets local work, stashes automatically, or creates merge commits. Git history provides the previous code versions; `.update-backups` is used only by ZIP mode. Authentication prompts are disabled in the helper; if credentials are required, run `git pull --ff-only` in a terminal to sign in yourself, then retry.
 
 **Saved progress stays in Chrome.** The updater does not read or write browser profiles, your imported export, decisions, Review later list, Undo history, or bar position. Keep the **same installation folder** and **existing extension installed**: do not uninstall it or load the update as a second extension. Reloading clears the temporary tab session, while your saved decisions and remaining queue persist. The code backups are not backups of browser progress. See [Chrome's storage documentation](https://developer.chrome.com/docs/extensions/reference/api/storage).
 
-If your older ZIP does not include the helper, download the latest [code ZIP](https://github.com/naqviabuza3d2y-ops/Instagram-Saved-Controller/archive/refs/heads/main.zip) once and copy **both `Update.cmd` and `Update.ps1`** beside your existing `manifest.json`. Run `Update.cmd` from that original folder for this and future updates.
+If your older ZIP does not include the helper, download the latest [code ZIP](https://github.com/naqviabuza3d2y-ops/Instagram-Saved-Controller/archive/refs/heads/main.zip) once and copy **both `Update.cmd` and `Update.ps1`** beside your existing `manifest.json`. Run `Update.cmd` from that original folder for this and future updates. For an older Git clone, run `git pull --ff-only` once to receive the new helpers.
 
 If an update fails, read the console error and leave Chrome on the existing version. Check your connection or folder permissions, then retry. If automatic restoration fails, the error identifies the files and backup path: copy those files from the backup's `files` directory into the **same** installation folder before reloading. Keep backups until the update works; you may then remove old folders inside `.update-backups`. A forced shutdown during installation can also require restoring the backup manually.
 
@@ -66,7 +68,7 @@ If an update fails, read the console error and leave Chrome on the existing vers
 3. In Finder, open the extracted folder and copy its **contents** into the **original extension folder** (the one Chrome already uses). Replace matching files. Keep the original folder in place, along with any personal files; do not load the newly extracted folder as another extension.
 4. Open `chrome://extensions`, click the extension's **Reload** icon, and refresh Instagram tabs. Choose **Start review** to resume. Keep the existing extension installed so its saved progress remains available.
 
-**Git clones (Windows/macOS/Linux):** use `git pull --ff-only`, then reload the extension and refresh Instagram tabs. The ZIP helper refuses Git checkouts so it cannot overwrite local work. Linux ZIP users can follow the same copy-in-place process as macOS using their file manager.
+**Git clones on macOS/Linux:** use `git pull --ff-only`, then reload the extension and refresh Instagram tabs. Windows clones can use `Update.cmd` or the same terminal command. Linux ZIP users can follow the same copy-in-place process as macOS using their file manager.
 
 ## How to use
 
@@ -130,7 +132,7 @@ Detection looks for no bookmark control, no visible media, and either the Englis
   - `storage`, to save your progress and settings.
   - Access to `https://www.instagram.com/*`, to show the review bar and operate Instagram's bookmark button.
 - It makes no network requests of its own and loads no remote code.
-- The optional Windows `Update.cmd` helper runs outside Chrome and downloads extension code from this project's GitHub `main` branch only when you launch it. It does not send your export or review progress.
+- The optional Windows `Update.cmd` helper runs outside Chrome only when you launch it. ZIP installs download this project's GitHub `main` branch; Git clones pull their current branch's configured upstream. It does not send your export or review progress.
 
 ## Limitations and disclaimer
 
@@ -161,8 +163,8 @@ content.js      Review bar and unavailable-post detection (shadow DOM)
 popup.html      Popup markup and styles
 popup.mjs       Popup logic
 export.mjs      saved_posts.json parser
-Update.cmd      Windows ZIP updater launcher (double-click)
-Update.ps1      Download, validation, backup, and rollback implementation
+Update.cmd      Windows updater launcher for ZIP installs and Git clones (double-click)
+Update.ps1      Git/ZIP detection, fast-forward pulls, ZIP validation, backups, and rollback
 ```
 
 ## Roadmap
@@ -202,7 +204,7 @@ Run the full automated suite from the repository root with Node.js 24 or later:
 node --test tests/*.test.mjs
 ```
 
-Windows also runs the updater integration tests with the built-in Windows PowerShell 5.1. They use temporary ZIP installations and a local HTTP server to check downloads, validation, backups, rollback, and preservation of unrelated files and simulated browser progress. The updater tests are skipped on other operating systems. To run just these tests on Windows:
+Windows also runs the updater integration tests with the built-in Windows PowerShell 5.1 and Git on PATH. They use temporary ZIP installations, local Git repositories/remotes, and a local HTTP server to check installation detection, fast-forward pulls, local-change protection, Git failures, downloads, validation, backups, rollback, and preservation of unrelated files and simulated browser progress. They never pull or change the real checkout. The updater tests are skipped on other operating systems. To run just these tests on Windows:
 
 ```sh
 node --test tests/updater.test.mjs

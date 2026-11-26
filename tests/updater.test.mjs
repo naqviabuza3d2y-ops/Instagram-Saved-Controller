@@ -19,7 +19,7 @@ function powershell(code, env = {}) {
   return new Promise((accept, reject) => {
     const child = spawn("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive",
       "-ExecutionPolicy", "Bypass", "-EncodedCommand", Buffer.from(code, "utf16le").toString("base64")],
-    { env: { ...process.env, ...env }, windowsHide: true });
+    { env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "NUL", ...env }, windowsHide: true });
     let stdout = "", stderr = "";
     child.stdout.on("data", chunk => { stdout += chunk; });
     child.stderr.on("data", chunk => { stderr += chunk; });
@@ -31,7 +31,8 @@ function powershell(code, env = {}) {
 function runLauncher(path) {
   return new Promise((accept, reject) => {
     const child = spawn(process.env.ComSpec, ["/d", "/s", "/c", `""${path}" < NUL"`],
-      { windowsHide: true, windowsVerbatimArguments: true });
+      { windowsHide: true, windowsVerbatimArguments: true,
+        env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "NUL" } });
     let stdout = "", stderr = "";
     child.stdout.on("data", chunk => { stdout += chunk; });
     child.stderr.on("data", chunk => { stderr += chunk; });
@@ -84,12 +85,13 @@ async function fixture(t) {
       } finally { $zip.Dispose() }`);
     assert.equal(result.code, 0, result.stderr);
   }
-  async function run({ before = "", after = "", download = "", failure = false } = {}) {
+  async function run({ before = "", after = "", download = "", failure = false,
+    method = "Invoke-ExtensionUpdate", directory = install } = {}) {
     return powershell(`$ErrorActionPreference = 'Stop'
       . ${ps(updater)}
       ${before}
       try {
-        Invoke-ZipUpdate -InstallDirectory ${ps(install)} -DownloadArchive {
+        ${method} -InstallDirectory ${ps(directory)} -DownloadArchive {
           param($uri, $destination)
           if ($uri -ne 'https://github.com/naqviabuza3d2y-ops/Instagram-Saved-Controller/archive/refs/heads/main.zip') { throw 'Wrong update URL' }
           ${download || `[IO.File]::Copy(${ps(archive)}, $destination)`}
@@ -168,7 +170,7 @@ test("ZIP updater keeps all files intact when downloading fails", { skip: !windo
 test("ZIP updater refuses Git checkouts and simultaneous updates", { skip: !windows }, async t => {
   const f = await fixture(t);
   await mkdir(join(f.install, ".git"));
-  let result = await f.run({ failure: true });
+  let result = await f.run({ failure: true, method: "Invoke-ZipUpdate" });
   assert.equal(result.code, 0, result.stderr);
   assert.match(result.stdout, /Git checkout/);
   await rmdir(join(f.install, ".git"));
@@ -224,14 +226,152 @@ test("Production download function handles HTTP downloads and failures", { skip:
   assert.deepEqual(await readFile(f.archive), payload);
 });
 
-test("Double-click launcher reports errors without replacing code in Git checkouts", { skip: !windows }, async t => {
+test("Double-click launcher rejects invalid Git metadata without falling back to ZIP", { skip: !windows }, async t => {
   const f = await fixture(t);
   await mkdir(join(f.install, ".git"));
   const result = await runLauncher(join(f.install, "Update.cmd"));
   assert.equal(result.code, 1, JSON.stringify(result));
-  assert.match(result.stdout, /Git checkout/, JSON.stringify(result));
+  assert.match(result.stdout, /not a git repository|git rev-parse.*failed/, JSON.stringify(result));
+  assert.doesNotMatch(result.stdout, /Downloading the latest/);
   assert.match(result.stdout, /Update failed/);
   await f.assertOriginal();
+});
+
+async function git(directory, ...args) {
+  const result = await new Promise((accept, reject) => {
+    const child = spawn("git", ["-C", directory, ...args], { windowsHide: true,
+      env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "NUL", GIT_TERMINAL_PROMPT: "0" } });
+    let stdout = "", stderr = "";
+    child.stdout.on("data", chunk => { stdout += chunk; });
+    child.stderr.on("data", chunk => { stderr += chunk; });
+    child.on("error", reject);
+    child.on("close", code => accept({ code, stdout, stderr }));
+  });
+  assert.equal(result.code, 0, `git ${args.join(" ")}: ${result.stderr}`);
+  return result.stdout.trim();
+}
+
+async function gitFixture(t) {
+  const f = await fixture(t);
+  const remote = join(f.root, "origin.git");
+  const publisher = join(f.root, "publisher");
+  await git(f.root, "init", "--bare", "--initial-branch=main", remote);
+  await git(f.install, "init", "--initial-branch=main");
+  await git(f.install, "config", "user.name", "Updater tests");
+  await git(f.install, "config", "user.email", "updater@example.invalid");
+  await writeFile(join(f.install, ".gitignore"), ".update.lock\n.update-backups/\nsaved_posts.json\nnotes.txt\n");
+  await git(f.install, "add", ".");
+  await git(f.install, "commit", "-m", "Initial installation");
+  await git(f.install, "remote", "add", "origin", remote);
+  await git(f.install, "push", "--set-upstream", "origin", "main");
+  const originalHead = await git(f.install, "rev-parse", "HEAD");
+  await git(f.root, "clone", remote, publisher);
+  await git(publisher, "config", "user.name", "Updater tests");
+  await git(publisher, "config", "user.email", "updater@example.invalid");
+  await writeFile(join(publisher, "content.js"), "new Git content.js");
+  await git(publisher, "add", "content.js");
+  await git(publisher, "commit", "-m", "Update extension code");
+  await git(publisher, "push", "origin", "main");
+  const incomingHead = await git(publisher, "rev-parse", "HEAD");
+  return { ...f, remote, publisher, originalHead, incomingHead };
+}
+
+test("Git auto-detection fast-forwards the tracked branch, preserves progress, and handles no-op pulls", { skip: !windows }, async t => {
+  const f = await gitFixture(t);
+  const options = { download: "throw 'ZIP must not be downloaded for Git'",
+    before: "$env:GIT_TERMINAL_PROMPT = 'previous'; $env:GCM_INTERACTIVE = 'previous'",
+    after: "if ($env:GIT_TERMINAL_PROMPT -ne 'previous' -or $env:GCM_INTERACTIVE -ne 'previous') { throw 'Git environment was not restored' }" };
+  const result = await f.run(options);
+  assert.equal(result.code, 0, result.stderr);
+  assert.match(result.stdout, /git pull --ff-only/);
+  assert.match(result.stdout, /chrome:\/\/extensions/);
+  assert.equal(await git(f.install, "rev-parse", "HEAD"), f.incomingHead);
+  assert.equal(await readFile(join(f.install, "content.js"), "utf8"), "new Git content.js");
+  assert.equal(await git(f.install, "status", "--porcelain"), "");
+  assert.equal(await git(f.install, "branch", "--show-current"), "main");
+  await f.assertPreserved();
+  assert.ok(!(await readdir(f.install)).includes(".update-backups"));
+  const again = await f.run(options);
+  assert.equal(again.code, 0, again.stderr);
+  assert.match(again.stdout, /Already up to date/);
+});
+
+for (const state of ["modified", "staged", "untracked"]) {
+  test("Git updater preserves and refuses " + state + " local changes", { skip: !windows }, async t => {
+    const f = await gitFixture(t);
+    const file = state === "untracked" ? "personal.txt" : "background.js";
+    await writeFile(join(f.install, file), "local work - keep me");
+    if (state === "staged") await git(f.install, "add", file);
+    const before = await git(f.install, "status", "--porcelain");
+    const result = await f.run({ failure: true, download: "throw 'ZIP fallback is forbidden'" });
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /local changes or untracked files/);
+    assert.equal(await git(f.install, "rev-parse", "HEAD"), f.originalHead);
+    assert.equal(await git(f.install, "status", "--porcelain"), before);
+    assert.equal(await readFile(join(f.install, file), "utf8"), "local work - keep me");
+    await f.assertPreserved();
+  });
+}
+
+test("Git updater refuses diverged history without merge, rebase, reset, or ZIP fallback", { skip: !windows }, async t => {
+  const f = await gitFixture(t);
+  await writeFile(join(f.install, "background.js"), "local committed work");
+  await git(f.install, "add", "background.js");
+  await git(f.install, "commit", "-m", "Local change");
+  const head = await git(f.install, "rev-parse", "HEAD");
+  const result = await f.run({ failure: true, download: "throw 'ZIP fallback is forbidden'" });
+  assert.equal(result.code, 0, result.stderr);
+  assert.match(result.stdout, /git pull --ff-only failed/);
+  assert.equal(await git(f.install, "rev-parse", "HEAD"), head);
+  assert.equal(await git(f.install, "status", "--porcelain"), "");
+  assert.equal(await readFile(join(f.install, "background.js"), "utf8"), "local committed work");
+  await f.assertPreserved();
+});
+
+for (const state of ["detached", "no upstream", "missing Git", "remote failure"]) {
+  test("Git updater stops safely for " + state, { skip: !windows }, async t => {
+    const f = await gitFixture(t);
+    let before = "", message;
+    if (state === "detached") { await git(f.install, "checkout", "--detach"); message = /detached HEAD/; }
+    if (state === "no upstream") { await git(f.install, "branch", "--unset-upstream"); message = /no upstream/; }
+    if (state === "missing Git") { before = "$env:PATH = ''"; message = /Git is not installed or is not on PATH/; }
+    if (state === "remote failure") {
+      await git(f.install, "remote", "set-url", "origin", join(f.root, "missing-remote.git"));
+      message = /git pull --ff-only failed/;
+    }
+    const result = await f.run({ failure: true, before, download: "throw 'ZIP fallback is forbidden'" });
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, message);
+    assert.equal(await git(f.install, "rev-parse", "HEAD"), f.originalHead);
+    await f.assertOriginal();
+  });
+}
+
+test("Git worktrees with a .git file use Git instead of ZIP", { skip: !windows }, async t => {
+  const f = await gitFixture(t);
+  const worktree = join(f.root, "linked worktree");
+  await git(f.install, "worktree", "add", "-b", "linked-update", worktree, "HEAD");
+  await git(worktree, "branch", "--set-upstream-to=origin/main");
+  const result = await f.run({ directory: worktree, download: "throw 'ZIP fallback is forbidden'" });
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(await git(worktree, "rev-parse", "HEAD"), f.incomingHead);
+  assert.equal(await git(f.install, "rev-parse", "HEAD"), f.originalHead);
+  await f.assertOriginal();
+});
+
+test("Double-click launcher updates a real Git clone and safely replaces its own helpers", { skip: !windows }, async t => {
+  const f = await gitFixture(t);
+  await writeFile(join(f.publisher, "Update.cmd"), "@echo off\r\necho UNEXPECTED-GIT-LAUNCHER\r\nexit /b 7\r\n");
+  await writeFile(join(f.publisher, "Update.ps1"), "throw 'UNEXPECTED-GIT-HELPER'");
+  await git(f.publisher, "add", "Update.cmd", "Update.ps1");
+  await git(f.publisher, "commit", "-m", "Update helpers");
+  await git(f.publisher, "push", "origin", "main");
+  const result = await runLauncher(join(f.install, "Update.cmd"));
+  assert.equal(result.code, 0, JSON.stringify(result));
+  assert.match(result.stdout, /git pull --ff-only/);
+  assert.doesNotMatch(result.stdout, /UNEXPECTED-GIT-LAUNCHER|UNEXPECTED-GIT-HELPER|Update failed/);
+  assert.equal(await git(f.install, "rev-parse", "HEAD"), await git(f.publisher, "rev-parse", "HEAD"));
+  await f.assertPreserved();
 });
 
 test("Double-click launcher finishes successfully even when the update replaces both helpers", { skip: !windows }, async t => {
